@@ -1,57 +1,35 @@
+{-# LANGUAGE DeriveGeneric #-}
+import Control.Monad (forever)
+import Data.ByteString (fromStrict)
 import Network.Socket
-import Network.Socket.ByteString (recvFrom, sendTo)
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as BSL
-import Data.Map (Map)
-import qualified Data.Map as Map
+import Network.Socket.ByteString
+import Data.ByteString.Lazy (toStrict)
 import Data.Aeson
-import Data.Aeson.Key (fromString)
-import System.Random (randomRIO)
-import Control.Concurrent (threadDelay)
-import Text.Read (readMaybe)
-import Data.Word (Word8)
-import System.Timeout (timeout)
-import Network.IP.Addr (IP46(IPv4),IP)
+import GHC.Generics
 
-data PeerRequest = PleaseSendPeers
-  deriving (Show)
+data P = P { a :: String, p :: Int } deriving (Generic, Show)
+instance ToJSON P
+instance FromJSON P
 
-instance ToJSON PeerRequest where
-  toJSON PleaseSendPeers = object [fromString "PleaseSendPeers" .= object []]
+b = [("148.71.89.128", 24254), ("159.69.54.127", 24254)]
 
-main :: IO ()
 main = do
-  -- Create a UDP socket
-  sock <- socket AF_INET Datagram defaultProtocol
-  bind sock (SockAddrInet 0 0)
+  s <- socket AF_INET Datagram defaultProtocol
+  bind s (SockAddrInet 24255 0)
+  mapM_ (f s) b
+  f' s
 
-  let peers = Map.fromList [("148.71.89.128", 24254), ("159.69.54.127", 24254)]
-  loop sock peers
+f s (a, p) = do
+  let m = P a p
+  sendTo s (toStrict $ encode m) =<< a'
+  where
+    a' = do
+      h <- getAddrInfo (Just (defaultHints { addrSocketType = Datagram })) (Just a) (Just $ show p)
+      return $ addrAddress $ head h
 
-loop :: Socket -> Map String Int -> IO ()
-loop sock peers = do
-  -- Receive a message with timeout
-  msg <- timeout 1000000 (recvFrom sock 1024)
-  case msg of
-    Just (msg, sockaddr) -> do
-      print ("Received from: " ++ show sockaddr)
-      print msg
-    Nothing -> print "Timeout"
-
-  print "Sending request..."
-  -- Send request for more peers to a random peer
-  idx <- randomRIO (0, Map.size peers - 1)
-  let (peerAddr, peerPort) = Map.elemAt idx peers
-  print ("Peer addr: " ++ peerAddr)
-  print ("Peer port: " ++ show peerPort)
-
-  case fromString peerAddr :: Maybe (IP 'IPv4) of
-    Just addr -> do
-      let peerSockAddr = SockAddrInet (fromIntegral peerPort) (fromIntegral (fromIPv4 addr))
-          request = encode $ PleaseSendPeers
-      print ("Sending to: " ++ show peerSockAddr)
-      sendTo sock (BSL.toStrict request) peerSockAddr
-    Nothing -> print "Invalid address"
-
-  loop sock peers
+f' s = forever $ do
+  (m, _) <- recvFrom s 1024
+  case eitherDecode (fromStrict m) of
+    Right (P a p) -> print ("D", a, p)
+    Left e -> print e
 
