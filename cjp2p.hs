@@ -1,4 +1,9 @@
 {-# LANGUAGE DeriveGeneric #-}
+-- vim: set expandtab shiftwidth=2
+import qualified Data.Set as Set
+import Network.Socket (setSocketOption, SocketOption(Broadcast))
+import Text.Read (readMaybe)
+
 import qualified Data.Text.IO as TIO
 import qualified Data.Aeson.KeyMap as KM
 
@@ -29,44 +34,40 @@ instance ToJSON PeerRequest where
 data PeerResponse = PeerResponse { peers :: [String] } deriving (Generic, Show)
 instance FromJSON PeerResponse
 
-b = [ ("159.69.54.127", 24254)]
+b = [SockAddrInet (fromIntegral port) (inet_addr ip) | (ip, port) <- [("148.71.89.128", 24254),("159.69.54.127", 24254)]]
+
 
 main = do
   s <- socket AF_INET Datagram defaultProtocol
+  setSocketOption s Broadcast 1
   bind s (SockAddrInet 24255 0)
-  let peers = Map.fromList b
-  forkIO $ forever $ do
-    threadDelay 1000000 -- 1 second
-    idx <- randomRIO (0, length b - 1)
-    let (peerAddr, peerPort) = b !! idx
-    sendPeerRequest s peerAddr peerPort
+  let peers = Set.fromList b
   loop s peers
 
-loop :: Socket -> Map.Map String Int -> IO ()
+loop :: Socket -> Set.Set SockAddr -> IO ()
 loop s peers = do
   msg <- timeout 1000000 (recvFrom s 1024)
+  mapM_ (\(k, v) -> TIO.putStrLn (T.pack (show (k, v)))) (Set.toList peers)
   case msg of
     Just (m, _) -> case decode (fromStrict m) :: Maybe Value of
       Just messages -> do
-        let newPeers = getPeers messages
-        TIO.putStrLn (T.pack "newPeers: " <> T.pack (show newPeers))
-        let newPeerMap = Map.fromList [(T.unpack p, 1) | p <- newPeers]
-        mapM_ (\(k, v) -> TIO.putStrLn (T.pack (show (k, v)))) (Map.toList newPeerMap)
-        let peers' = Map.union peers newPeerMap
-        loop s (Map.union peers newPeerMap)
+        let newPeers = Set.fromList [addr | p <- getPeers messages, let addr = parsePeer p, isRight addr, let Right a = addr]
+       -- let peers' = Set.union peers newPeerMap
+        loop s (Set.union peers newPeers)
       Nothing -> print "decode error" >> loop s peers
     Nothing -> do
-      idx <- randomRIO (0, Map.size peers - 1)
-      let (peerAddr, peerPort) = Map.elemAt idx peers
+      idx <- randomRIO (0, Set.size peers - 1)
+      let (peerAddr, peerPort) = Set.elemAt idx peers
+      TIO.putStrLn (T.pack "peers " <> T.pack (show peers))
       sendPeerRequest s peerAddr peerPort
       loop s peers
   where
-    getPeers :: Value -> [T.Text]
+    getPeers :: Value -> [SockAddr]
     getPeers (Array arr) = concatMap extractPeers (V.toList arr)
       where
         extractPeers (Object obj) = case KM.lookup (Key.fromString "Peers") obj of
           Just (Object peersObj) -> case KM.lookup (Key.fromString "peers") peersObj of
-            Just (Array peersArr) -> [p | String p <- V.toList peersArr]
+            Just (Array peersArr) -> catMaybes [parseSockAddr p | String p <- V.toList peersArr]
             _ -> []
           _ -> []
         extractPeers _ = []
@@ -80,4 +81,12 @@ sendPeerRequest s peerAddr peerPort = do
   let request = encode PleaseSendPeers
   addr:_ <- getAddrInfo (Just (defaultHints { addrSocketType = Datagram })) (Just peerAddr) (Just (show peerPort))
   sendTo s (toStrict request) (addrAddress addr)
+
+parseSockAddr :: T.Text -> Maybe SockAddr
+parseSockAddr t = case T.splitOn ":" t of
+  [ipT, portT] -> do
+    port <- readMaybe (T.unpack portT)
+    addr:_ <- getAddrInfo (Just (defaultHints {addrFlags = [AI_NUMERICHOST]}) ) (Just (T.unpack ipT)) (Just (show port))
+    return (addrAddress addr)
+  _ -> Nothing
 
