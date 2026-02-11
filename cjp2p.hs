@@ -4,7 +4,7 @@ import Network.Socket (setSocketOption, SocketOption(Broadcast))
 import Text.Read (readMaybe)
 
 import qualified Data.Text.IO as TIO
-import qualified Data.Aeson.KeyMap as KM
+import qualified Data.Aeson.KeyMap as KeyMap
 
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -64,8 +64,8 @@ loop s peers = do
     getPeers :: Value -> [T.Text]
     getPeers (Array arr) = concatMap extractPeers (V.toList arr)
       where
-        extractPeers (Object obj) = case KM.lookup (Key.fromString "Peers") obj of
-          Just (Object peersObj) -> case KM.lookup (Key.fromString "peers") peersObj of
+        extractPeers (Object obj) = case KeyMap.lookup (Key.fromString "Peers") obj of
+          Just (Object peersObj) -> case KeyMap.lookup (Key.fromString "peers") peersObj of
             Just (Array peersArr) -> [p | String p <- V.toList peersArr]
             _ -> []
           _ -> []
