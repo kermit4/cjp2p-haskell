@@ -113,13 +113,9 @@ loop s peers = do
       where
         extractPeers (Object obj) = case KeyMap.lookup (Key.fromString "Peers") obj of
           Just (Object peersObj) -> case KeyMap.lookup (Key.fromString "peers") peersObj of
-            Just (Array peersArr) ->
-              let peers = V.toList peersArr
-              let strings = []
-              for each peer in peers:
-                if peer is a String p:
-                  add p to strings
-              return strings
+            Just (Array peersArr) -> [p | String p <- V.toList peersArr]
+
+
 
   
             _ -> []
