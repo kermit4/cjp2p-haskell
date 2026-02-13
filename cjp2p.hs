@@ -1,11 +1,10 @@
--- vim: set expandtab shiftwidth=2
+-- vim: set expandtab shiftwidth=2 tabstop=2:
 {-# LANGUAGE DeriveGeneric #-}
 import Network.Socket (setSocketOption, SocketOption(Broadcast))
 import Text.Read (readMaybe)
-
 import qualified Data.Text.IO as TIO
 import qualified Data.Aeson.KeyMap as KeyMap
-
+import Control.Monad (forM)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Control.Monad (forever)
@@ -22,16 +21,10 @@ import Control.Concurrent
 import System.Random (randomRIO)
 import qualified Data.Map as Map
 
-data P = P { a :: String, p :: Int } deriving (Generic, Show)
-instance ToJSON P
-instance FromJSON P
 
 data PeerRequest = PleaseSendPeers deriving (Show)
 instance ToJSON PeerRequest where
   toJSON PleaseSendPeers = toJSON [object [(fromString "PleaseSendPeers" .= object [])]]
-
-data PeerResponse = PeerResponse { peers :: [String] } deriving (Generic, Show)
-instance FromJSON PeerResponse
 
 b = [ ("148.71.89.128", 24254),("159.69.54.127", 24254)]
 
@@ -42,18 +35,72 @@ main = do
   let peers = Map.fromList b
   loop s peers
 
-loop :: Socket -> Map.Map String Int -> IO ()
+-- Define a function that takes a tuple (k, v) as input
+printPeer :: (String, Int) -> IO ()
+printPeer tuple = do
+  -- Extract the key (k) and value (v) from the tuple
+  let k = fst tuple
+  let v = snd tuple
+  
+  -- Convert the tuple to a string
+  let tupleString = show (k, v)
+  
+  -- Convert the string to a Text value
+  let textValue = T.pack tupleString
+  
+  -- Print the Text value to the console
+  TIO.putStrLn textValue
+
+
+
 loop s peers = do
   msg <- timeout 1000000 (recvFrom s 1024)
-  mapM_ (\(k, v) -> TIO.putStrLn (T.pack (show (k, v)))) (Map.toList peers)
+  -- Apply the printPeer function to each element in the list
+  mapM_ printPeer (Map.toList peers)
+
   case msg of
-    Just (m, _) -> case decode (fromStrict m) :: Maybe Value of
+    Just (m, _) -> case decode (fromStrict m) of
+    -- Try to decode the message as JSON
+      -- If decoding succeeds, process the message
       Just messages -> do
-        let newPeers = [(T.unpack ip, port) | p <- getPeers messages, let (ip : portS : _) = T.splitOn (T.pack ":") p, let Just port = readMaybe (T.unpack portS)]
+        -- Extract peer addresses from the message
+        let peerAddresses = getPeers messages
+        
+        -- Create a list of (IP, port) tuples
+        let newPeers = []
+        newPeers' <- forM peerAddresses $ \peerAddress -> do
+          -- Split the address into IP and port
+          let parts = T.splitOn (T.pack ":") peerAddress
+          let ip = parts !! 0
+          let portS = parts !! 1
+          
+          -- Parse the port number
+          case readMaybe (T.unpack portS) of
+            Just port -> do
+              -- Return the peer
+              return [(T.unpack ip, port)]
+            Nothing -> do
+              -- Ignore invalid port numbers
+              return []
+        
+        -- Flatten the list of lists
+        let newPeers = concat newPeers'
+        
+        -- Create a map from the new peers
         let newPeerMap = Map.fromList newPeers
-        let peers' = Map.union peers newPeerMap
-        loop s (Map.union peers newPeerMap)
-      Nothing -> print "decode error" >> loop s peers
+        
+        -- Merge the new peers with the existing peers
+        let updatedPeers = Map.union peers newPeerMap
+        
+        -- Continue processing with the updated peers
+        loop s updatedPeers
+      
+      -- If decoding fails, print an error and continue
+      Nothing -> do
+        print "decode error"
+        loop s peers
+
+
     Nothing -> do
       idx <- randomRIO (0, Map.size peers - 1)
       let (peerAddr, peerPort) = Map.elemAt idx peers
@@ -66,7 +113,15 @@ loop s peers = do
       where
         extractPeers (Object obj) = case KeyMap.lookup (Key.fromString "Peers") obj of
           Just (Object peersObj) -> case KeyMap.lookup (Key.fromString "peers") peersObj of
-            Just (Array peersArr) -> [p | String p <- V.toList peersArr]
+            Just (Array peersArr) ->
+              let peers = V.toList peersArr
+              let strings = []
+              for each peer in peers:
+                if peer is a String p:
+                  add p to strings
+              return strings
+
+  
             _ -> []
           _ -> []
         extractPeers _ = []
